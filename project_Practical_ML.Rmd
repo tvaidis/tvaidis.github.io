@@ -1,0 +1,213 @@
+Practical Machine Learning - Project  
+==============================
+
+
+## Background - Problem description
+
+The project objective is to build a machine learning algorithm to process 
+a dataset of measurements collected by sensors located on human body parts during predefined physical exercise and predict the quality of the execution of each exercise. Each exercise quality is classified by a set of 5-classes. For example, for a set of 10 repetitions of the 
+"Unilateral Dumbbell Biceps Curl" exercise, the classification is as follows:
+
+* "A": exercise was conducted exactly according to the specifcation 
+* "B": throwing the elbows to the front,
+* "C": lifting the dumbbell only halfway 
+* "D": lowering the dumbbell only halfway
+* "E": throwing the hips to the front.
+
+Similar classification is applied to all exercises monitored.   
+
+A detailed description of the original tests performed, as well as the data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+The provided training dataset consist of 159 predictor variables and the outcome variable ("classe"). We will build a classification model to predict "classe" via processing of a   subset of the predictor variables.
+
+------
+
+
+```r
+library(ggplot2)
+library(caret)
+```
+
+```
+## Loading required package: lattice
+```
+
+```r
+library(corrplot)
+```
+
+
+## Data cleaning - Initial Feature Selection
+
+In both the training and test data sets several predictors had a very large percentage of NA values. Those predictors were excluded from the training set, as they offer no explanatory power. The predictors "user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp,"new_window" were also removed.
+
+
+```r
+trainRaw.df <- read.csv(file="pml-training.csv",header=T,sep=",",na.strings=c("NA",""))
+
+#-- Maintain only predictors with 0 NA's
+temp <- apply(X=trainRaw.df,MARGIN=2,function(x) sum(is.na(x))) #Count NA's for each column
+trainRaw.df <- trainRaw.df[,which(temp==0)]
+
+#-- Remove irrelevant cols ---
+cols_off <- grep(pattern="user_name|timestamp|new_window",x=names(trainRaw.df))
+trainRaw.df <- trainRaw.df[,-c(1,cols_off)]
+```
+
+Correlation patterns among predictors, using the "corrplot" package:
+
+
+```r
+#-- Check correlation patterns in features --
+corrplot(corr=cor(trainRaw.df[,2:53]),method="circle",diag=F,title="Corrplot of predictors",type="lower",tl.cex=0.6)
+```
+
+![plot of chunk unnamed-chunk-1](figure/unnamed-chunk-1.png) 
+
+## Training and Cross-validation Set selection  
+
+For the training-testing set a (70%,30%) partition of the provided training data set ("pml-testing.csv") was considered, using the **createDataPartition** function of the **caret** package. The testing set (30% portion of original training set) was used for estimating the out of sample error for each model considered. The k-fold cross validation approach was considered with k=4, i.e., the training set (70% portion of original training set) was divided into 4 equally sized subsets. The models were succesively fitted to each of the k subsets, evaluated on the rest of the training set and the estimation errors were averaged. The parameter k=4 was chosen to compromise bias and variance. The bootsrap cross-validation (default for the "caret"" package) was avoided as it carried much heavier computational burden while providing no improvement on error performance.
+
+
+
+```r
+# Create training and cross validation sets -----------
+set.seed(657)
+library(caret)
+intrain <- createDataPartition(y=trainRaw.df$classe,p=0.7,list=F)
+trainSet <- trainRaw.df[intrain,]        #-- training Set
+crossValidSet <- trainRaw.df[-intrain,]   #-- Cross validation set
+```
+
+
+## Model Built 
+
+This is a non-binary classification problem. The algorithms considered were chosen from the tree-based classification family. The simple classification tree model was first built. The results were not sartisfactory at all (OOB error more than 50%). A random forest model was then tested.
+
+### Random Forest model
+
+A random forest model was built via the "train" function of the "caret" package. The k-fold cross-validation option was applied (k=4), while parallel computation was allowed for to accelerate processing. All 53 predictors were included in the model building procedure.
+A total of 500 trees were computed.
+
+*The R code chunk below (randomForestModel) is not executed (eval=FALSE). The purpose is to present the code for building the random forest model fit. The actual model derived from this code chunk was saved on disk and loaded via the next code chunk (loadrandomForestModel). This is done because the actual model computation is time consuming and causes significant delay in building the markdown file.*
+
+
+```r
+set.seed(23134)
+model.rf <- train(form=classe~.,method="rf",
+                  trControl=trainControl(method="cv",number=4,allowParallel=T),
+                  data=trainSet)
+save(model.rf,file="model.rf.rda")
+```
+
+
+```r
+load("model.rf.rda")
+```
+
+### In sample error of random forest
+
+The confusion matrix for the in-sample error for each class is shown below.
+
+
+```r
+model.rf$finalModel$confusion
+```
+
+```
+##      A    B    C    D    E class.error
+## A 3904    1    0    0    1    0.000512
+## B    7 2650    1    0    0    0.003010
+## C    0    5 2390    1    0    0.002504
+## D    0    0    6 2244    2    0.003552
+## E    0    1    0    4 2520    0.001980
+```
+
+To explore the explaining power of the involved predictors for the random forest model, the predictor importance was plotted.
+
+
+```r
+#-- Plot variable importance -----
+randomForestImp.df <- data.frame(VarNames=row.names(model.rf$final$importance),
+                                 varImp=model.rf$final$importance[,1])
+row.names(randomForestImp.df) <- 1:nrow(randomForestImp.df)
+
+ggplot(randomForestImp.df,aes(x=varImp , y=reorder(VarNames,varImp))) + 
+  geom_segment(aes(yend=VarNames), xend=0, colour="grey50") + geom_point(size=3) +
+  ggtitle("Predictor importance for random forest model") + 
+  xlab("Mean Decrease Gini") + ylab("Predictors")
+```
+
+![plot of chunk unnamed-chunk-2](figure/unnamed-chunk-2.png) 
+
+### Expected out of sample error
+
+To estimate the out of sample error  the values of the "classe" variable were predicted for the test dataset (30% portion of original training set). The model provided an estimated out of sample error of **0.32%**
+
+
+```r
+# Compute out of sample  accuracy(error) 
+oos.pred <- predict(object=model.rf,newdata=crossValidSet)
+```
+
+```
+## Loading required package: randomForest
+## randomForest 4.6-7
+## Type rfNews() to see new features/changes/bug fixes.
+```
+
+```r
+model.rf_OOS_error <- sum(crossValidSet$classe != oos.pred)/nrow(crossValidSet)
+cat("Out of sample error for random forest: ",model.rf_OOS_error*100,"%")
+```
+
+```
+## Out of sample error for random forest:  0.3229 %
+```
+
+## Actual test error performance
+
+The actual test error for the random forest model was computed for the test set consisting of 20 (rows) experiments, where the outcome variable ("classe") was not provided.
+
+
+```r
+testRaw.df <- read.csv(file="pml-testing.csv",header=T,sep=",",na.strings=c("NA",""))
+
+#-- Remove irrelevant cols ---
+cols_off <- grep(pattern="user_name|timestamp|new_window",x=names(testRaw.df))
+testRaw.df <- testRaw.df[,-c(1,cols_off)]
+
+#-- Maintain only predictors with 0 NA's
+temp <- apply(X=testRaw.df,MARGIN=2,function(x) sum(is.na(x)))
+testRaw.df <- testRaw.df[,which(temp==0)]
+train.pred <- predict(model.rf,testRaw.df)
+
+#=====================================================#
+# save predicted answers to text files to be submitted for grading -----
+#=====================================================#
+answers <- as.character(train.pred)
+
+#=== File creating function =====#
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+# Save answers
+pml_write_files(answers)
+```
+
+**The random forest predicted all 20 test cases correctly.**
+
+## Conclusion
+
+The problem of predicting the quality of the execution of physical exercise was considered. 
+For all models trained, the k-fold cross validation method was used for error estimation.  The in sample and out of sample errors were computed.
+The mode of choice was the random forest model, as this exhibited the best performance among the models examined. 
+
+
+
+
